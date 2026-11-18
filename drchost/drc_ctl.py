@@ -546,7 +546,7 @@ def _session_tool_checks(host: Host, cfg: dict) -> List[Check]:
     elif session == "wiiu-wm":
         wm = REPO / "build_local/prefix/bin/wiiu-wm"
         out.append(Check("compositor", "Sesión del GamePad (wiiu-wm)", OK if wm.exists() else FAIL,
-                         str(wm) if wm.exists() else "falta wiiu-wm", "bash drchost/build_desktop_local.sh"))
+                         str(wm) if wm.exists() else "falta wiiu-wm", "bash scripts/build_desktop_local.sh (en el repo wiiu-wm)"))
     else:
         out.append(Check("compositor", "Sesión del GamePad (auto)", OK,
                          "se usa el escritorio del equipo" if host.which("Hyprland") or host.which("sway") else
@@ -616,11 +616,11 @@ def check_start(host: Optional[Host] = None, iface: Optional[str] = None, cfg: O
             # drc_ap.py lo comprueba otra vez con el AP en marcha y se detiene si falta.
             checks.append(Check("tsf", "TSF del driver (sin él no hay imagen)", WARN,
                                 f"{iface} está apagada: el atributo tsf aparece al levantar el AP, así que no se puede comprobar ahora; se verifica al arrancar",
-                                "Si al arrancar falla: sudo bash drchost/install_rtw89.sh  (repetir tras cada actualización del kernel)"))
+                                "Si al arrancar falla: sudo bash tools/install_rtw89.sh en el repo drc-wifi-drivers (repetir tras cada actualización del kernel)"))
         else:
             checks.append(Check("tsf", "TSF del driver (sin él no hay imagen)", WARN if allow else FAIL,
                                 drc_ap.TSF_MISSING_HELP.format(iface=iface),
-                                "sudo bash drchost/install_rtw89.sh  (repetir tras cada actualización del kernel)"))
+                                "sudo bash tools/install_rtw89.sh en el repo drc-wifi-drivers (repetir tras cada actualización del kernel)"))
     hostapd = find_hostapd(host)
     checks.append(Check("hostapd", "hostapd con parches DRC", OK if hostapd else FAIL, hostapd or "no está compilado",
                         "" if hostapd else "bash drchost/build_local.sh"))

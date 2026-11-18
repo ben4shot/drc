@@ -62,7 +62,7 @@ class CameraFrameAssembler:
         return frame
 
 SC = b"\0\0\0\1"
-# SPS del vídeo de la consola (854x480) con el ancho cambiado a 640 (40 MB); mismo PPS (drchost/tools/camdec.py).
+# SPS del vídeo de la consola (854x480) con el ancho cambiado a 640 (40 MB); mismo PPS (capture-analysis/camdec.py en wiiu-gamepad-research).
 SPS_640 = bytes.fromhex("67640020ac2b40501ec8")
 PPS = bytes([0x68, 0xee, 0x06, 0x0c, 0xe8])
 

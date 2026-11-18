@@ -65,7 +65,7 @@ def configure_hostap_drc(hostap_dir: Path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Configurar drc-hostap con TLS interno")
-    parser.add_argument("--hostap-dir", type=Path, default=Path(__file__).parent.parent / "pc2drc" / "drc-hostap",
+    parser.add_argument("--hostap-dir", type=Path, default=Path(__file__).resolve().parent.parent / "third_party" / "drc-hostap",
                         help="Directorio raíz de drc-hostap")
     args = parser.parse_args()
 

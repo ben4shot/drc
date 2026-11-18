@@ -1427,7 +1427,7 @@ int main() {
 def test_chunk_feed_lee_el_fichero_y_da_la_vuelta(tmp_path: Path):
     """
     Prueba 93: test C++ en el PC de drc::ParseChunkFeed / drc::ChunkFeed (DRC_CHUNK_FEED): lee el
-    fichero "CFD1" que genera drchost/chunkfeed.py (frames con marca de IDR y sus chunks), rechaza
+    fichero "CFD1" que genera capture-analysis/chunkfeed.py (repo wiiu-gamepad-research) (frames con marca de IDR y sus chunks), rechaza
     cabeceras malas y ficheros truncados, y entrega un frame por llamada dando la vuelta al llegar al
     final (el primero es siempre un IDR); Rewind() vuelve al principio (resync del GamePad).
     """

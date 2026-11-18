@@ -682,7 +682,7 @@ def tsf_sysfs_path(iface: str, sys_net: Path = Path("/sys/class/net")) -> Option
 TSF_MISSING_HELP = (
     "el driver Wi-Fi de {iface} no expone el TSF (/sys/class/net/{iface}/tsf). Sin él los frames de vídeo "
     "llevan sellos de tiempo que el GamePad descarta: se asocia pero no muestra imagen. Instala el driver "
-    "parcheado (rtw89: sudo bash drchost/install_rtw89.sh; brcmfmac: drchost/install_brcmfmac.sh) o fuerza el "
+    "parcheado (repo drc-wifi-drivers; rtw89: sudo bash tools/install_rtw89.sh; brcmfmac: tools/install_brcmfmac.sh) o fuerza el "
     "arranque con DRC_ALLOW_NO_TSF=1."
 )
 
@@ -1682,7 +1682,7 @@ def setup_virtual_display(
         if start and not (shutil.which(comp_argv[0]) or Path(comp_argv[0]).is_file()):
             raise RuntimeError(
                 f"No está el compositor '{comp_argv[0]}' para el escritorio del GamePad. Compila wiiu-wm con "
-                "drchost/build_desktop_local.sh, o indica otro con DESKTOP_COMMAND / DRC_COMPOSITOR en drc.conf."
+                "scripts/build_desktop_local.sh (en el repo wiiu-wm), o indica otro con DESKTOP_COMMAND / DRC_COMPOSITOR en drc.conf."
             )
         should_start = start if start is not None else bool(shutil.which(compositor))
         if should_start:
