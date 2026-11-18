@@ -1,0 +1,14 @@
+[Unit]
+Description=Sesion DRC: AP, escritorio y transmision al Wii U GamePad
+After=sys-subsystem-net-devices-wlan0.device
+Wants=sys-subsystem-net-devices-wlan0.device
+
+[Service]
+Type=simple
+Environment=DRC_TIMEOUT=60
+Environment=DRC_DESKTOP_USER=@DESKTOP_USER@
+ExecStart=/opt/drc/start_drc.sh --mode separate
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

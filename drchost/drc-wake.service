@@ -1,0 +1,17 @@
+[Unit]
+Description=Vigila el encendido del GamePad y arranca drc
+Conflicts=drc.service
+After=network-pre.target
+
+[Service]
+Type=simple
+# Interfaz y canal: WIFI_IFACE y WIFI_CHANNEL de /etc/drc/drc.conf. Si la interfaz aún no existe, falla y
+# Restart= lo vuelve a intentar.
+ExecStart=/opt/drc/drc_wake.py --mando auto --saltar
+Restart=on-failure
+RestartSec=5
+
+[Install]
+# Arranque normal de la Pi: espera al mando. Al verlo encender arranca `drc` (Conflicts lo detiene);
+# cuando `drc` se para, drc-wake-al-parar.conf lo vuelve a poner. Se habilita en lugar de `drc`.
+WantedBy=multi-user.target

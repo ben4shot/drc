@@ -1,0 +1,12 @@
+third_party/x264/
+build_local/
+__pycache__/
+*.o
+*.d
+*.a
+*.so
+.pytest_cache/
+*.pcap
+third_party/drc-hostap/conf/generated_*.conf
+config/generated_*
+config/drc.conf

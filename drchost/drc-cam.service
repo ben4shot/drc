@@ -1,0 +1,15 @@
+[Unit]
+Description=Alimentador V4L2 de la Camara del Wii U GamePad hacia /dev/video0
+After=drc.service
+Requires=drc.service
+
+[Service]
+Type=simple
+User=root
+# Interfaz: WIFI_IFACE de /etc/drc/drc.conf
+ExecStart=/usr/bin/python3 /opt/drc/drc_cam_v4l2.py --v4l2 /dev/video0
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

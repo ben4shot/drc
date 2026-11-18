@@ -1,0 +1,10 @@
+[Unit]
+Description=Para drc si el GamePad lleva un rato sin estar asociado (vuelve el vigilante)
+BindsTo=drc.service
+After=drc.service
+
+[Service]
+Type=simple
+# Interfaz: WIFI_IFACE de /etc/drc/drc.conf
+ExecStart=/opt/drc/drc_wake.py --mando auto --ausencia 30
+Restart=no

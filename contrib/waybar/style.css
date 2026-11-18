@@ -1,0 +1,15 @@
+/* Barra del Wii U GamePad: oscura y morada, como el escritorio */
+* { font-family: "DejaVu Sans", sans-serif; font-size: 13px; font-weight: bold; min-height: 0; }
+window#waybar { background: rgba(12, 9, 20, 0.92); color: #f3e8ff; border-bottom: 2px solid #7c3aed; }
+#custom-home, #custom-workspace, #custom-gp, #clock, #custom-volume, #custom-battery,
+#custom-vol-down, #custom-vol-up {
+  padding: 0 8px; margin: 3px 0; border-radius: 10px; background: #221738;
+}
+#custom-home { background: #7c3aed; color: #ffffff; }
+#custom-vol-down, #custom-vol-up { padding: 0 12px; background: #4c1d95; }
+#custom-volume.muted { color: #ff4d8d; }
+#custom-battery.warning { color: #ffd60a; }
+#custom-battery.critical { background: #e63946; color: #ffffff; }
+#custom-battery.charging { color: #80ed99; }
+#custom-battery.disconnected { color: #6b6b7b; }
+#custom-gp { background: #7c3aed; color: #ffffff; padding: 0 10px; }

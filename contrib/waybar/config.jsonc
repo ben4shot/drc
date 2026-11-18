@@ -1,0 +1,33 @@
+// Barra del escritorio del Wii U GamePad (wiiu-wm la coloca donde diga el editor del menú)
+{
+  "layer": "top",
+  "position": "top",
+  "height": 30,
+  "spacing": 4,
+  "modules-left": ["custom/home", "custom/workspace"],
+  "modules-center": ["clock"],
+  "modules-right": ["custom/vol-down", "custom/volume", "custom/vol-up", "custom/battery", "custom/gp"],
+
+  "custom/home": {
+    "format": "⌂ HOME",
+    "tooltip-format": "Recientes / Inicio",
+    "on-click": "sh -c 'echo home > \"$WIIU_WM_CTL\"'"
+  },
+  "custom/workspace": {
+    "exec": "drc-pad workspace", "return-type": "json", "interval": 10, "signal": 8,
+    "on-click": "sh -c 'echo workspace_next > \"$WIIU_WM_CTL\"'"
+  },
+  "clock": { "format": "{:%H:%M}", "tooltip-format": "{:%A %d de %B}" },
+
+  // Un solo botón (⚙) a la derecha; al tocarlo se abre un panel GTK (drc_menu.py) con los ajustes y su estado
+  "custom/gp": { "format": "⚙", "tooltip": false, "on-click": "drc-pad menu" },
+
+  "custom/vol-down": { "format": "−", "tooltip": false, "on-click": "drc-pad volume down" },
+  "custom/volume": {
+    "exec": "drc-pad volume", "return-type": "json", "interval": 5, "signal": 9,
+    "on-click": "drc-pad volume mute"
+  },
+  "custom/vol-up": { "format": "+", "tooltip": false, "on-click": "drc-pad volume up" },
+
+  "custom/battery": { "exec": "drc-pad battery", "return-type": "json", "interval": 15, "signal": 9 }
+}
