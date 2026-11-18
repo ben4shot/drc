@@ -537,3 +537,26 @@ def test_cage_ofrece_la_resolucion_del_mando_antes_de_arrancar_la_app():
     i = script.index("wlr-randr --output HEADLESS-1 --custom-mode 854x480@60Hz")
     assert i < script.index("exec steam -gamepadui")
     assert "1280x720" in script     # si falta wlr-randr queda en el registro de cage
+
+
+def test_vinculacion_en_el_canal_36_como_la_pi():
+    """La vinculación usa el canal 36 (el de la Pi y la consola) aunque la transmisión vaya en otro (WIFI_CHANNEL)."""
+    from drchost.drc_ap import pairing_channel
+    assert pairing_channel({"WIFI_CHANNEL": "40"}) == 36
+    assert pairing_channel({}) == 36
+    assert pairing_channel({"WIFI_CHANNEL": "40", "DRC_PAIR_CHANNEL": "44"}) == 44
+    assert pairing_channel({"DRC_PAIR_CHANNEL": ""}) == 36
+
+
+def test_aviso_red_normal_solo_con_tramas_del_mando():
+    """El aviso de «busca la red normal» no salta con el Device Name WPS que imprime hostapd (= WiiU<mac>),
+    solo con un probe del mando hacia la red normal o con su Data/PS-poll."""
+    from drchost.drc_ap import gamepad_wants_normal_network
+    ssid = "WiiUd83add12340"
+    hx = " ".join("%02x" % b for b in ssid.encode())
+    assert not gamepad_wants_normal_network(f"WPS: * Device Name", ssid)
+    assert not gamepad_wants_normal_network(f"     {hx[:47]}   {ssid}", ssid)   # hexdump_ascii de hostapd
+    assert not gamepad_wants_normal_network(f"device_name={ssid}", ssid)
+    probe = f"nl80211: MLME event frame - hexdump(len=123): 40 00 00 00 ff ff ff ff ff ff 02 aa bb cc dd ee ff ff ff ff ff ff 30 00 00 10 {hx} 01 08"
+    assert gamepad_wants_normal_network(probe, ssid)
+    assert gamepad_wants_normal_network("nl80211: Data/PS-poll frame from 02:aa:bb:cc:dd:ee", ssid)

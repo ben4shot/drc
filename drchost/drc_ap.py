@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Ensure system tools in /usr/sbin and /sbin (e.g. iw, hostapd) are available in PATH
 for p in ("/usr/sbin", "/sbin"):
@@ -372,6 +372,23 @@ class DHCPServer:
                     pass
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
+
+
+def pairing_channel(cfg: Dict[str, str]) -> int:
+    """Canal del AP de vinculación: 36, el de la consola y el que usaba la Pi (con él vinculaba bien). Va aparte
+    de WIFI_CHANNEL (el de la transmisión): el mando guarda la red y luego la busca en cualquier canal.
+    DRC_PAIR_CHANNEL lo cambia."""
+    return int((cfg.get("DRC_PAIR_CHANNEL") or "").strip() or 36)
+
+
+def gamepad_wants_normal_network(line: str, normal_ssid: str) -> bool:
+    """¿La línea de hostapd muestra al mando buscando su red normal (ya vinculado) en vez de la de vinculación?
+    Solo cuentan sus tramas: un probe con ese SSID (en el hexdump de la trama) o un Data/PS-poll. El SSID en texto
+    no sirve: hostapd imprime su propio Device Name WPS, que es justo WiiU<mac>."""
+    if "Data/PS-poll" in line:
+        return True
+    hx = " ".join("%02x" % b for b in normal_ssid.encode("ascii"))
+    return "MLME event frame" in line and hx in line
 
 
 def derive_pairing_mac_and_ssid(
@@ -876,10 +893,9 @@ def pair_gamepad_wps(
 
     cfg = load_drc_conf()
     base_hw_mac = resolve_base_mac(base_mac, cfg)
-    pairing_channel = int(cfg.get("WIFI_CHANNEL", 40))
+    pair_channel = pairing_channel(cfg)
     code_mac, pairing_ssid, pin = derive_pairing_mac_and_ssid(base_hw_mac, digits)
     normal_ssid = "WiiU" + code_mac.replace(":", "")
-    normal_ssid_hex = " ".join("%02x" % b for b in normal_ssid.encode("ascii"))
     symbols_str = " ".join(SYMBOLS[d] for d in digits)
 
     dummy_psk = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
@@ -889,7 +905,7 @@ def pair_gamepad_wps(
         psk_hex=dummy_psk,
         out_dir=out_dir,
         iface=iface,
-        channel=pairing_channel,
+        channel=pair_channel,
         digits=digits,
     )
 
@@ -971,7 +987,7 @@ def pair_gamepad_wps(
             return pin, pairing_conf_path, normal_conf_path
 
         print("\n" + "=" * 65, flush=True)
-        print(f"[*] ¡AP LISTO Y EMITIENDO EN 5 GHz (canal {pairing_channel})!", flush=True)
+        print(f"[*] ¡AP LISTO Y EMITIENDO EN 5 GHz (canal {pair_channel})!", flush=True)
         print(f"[*] MAC del AP: {code_mac} | SSID: {pairing_ssid}", flush=True)
         print(f"[*] >> AHORA presiona el botón SYNC detrás del GamePad e introduce: {symbols_str} <<", flush=True)
         print("=" * 65 + "\n", flush=True)
@@ -997,7 +1013,7 @@ def pair_gamepad_wps(
             ]):
                 print(f"[WIFI/DRC] {line_str}", flush=True)
 
-            if not warned_normal and any(k in line_str for k in [normal_ssid, normal_ssid_hex, "Data/PS-poll"]):
+            if not warned_normal and gamepad_wants_normal_network(line_str, normal_ssid):
                 warned_normal = True
                 print(f"\n[!] AVISO: El GamePad está buscando la red normal '{normal_ssid}' en vez de emparejarse.", flush=True)
                 print("[!] Para emparejarlo por WPS, pulsa el botón SYNC (el botón rojo detrás del GamePad) hasta ver los 4 símbolos en su pantalla táctil.\n", flush=True)

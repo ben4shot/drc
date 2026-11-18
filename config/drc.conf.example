@@ -35,6 +35,9 @@ WIFI_REGDOM="US"
 # Canal Wi-Fi de 5 GHz (canales estándar soportados por GamePad: 36, 40, 44, 48). También lo usa drc_wake.
 # (hostapd usa siempre el driver nl80211 y los datos de Nintendo que pide el mando: no hay nada que configurar.)
 WIFI_CHANNEL=36
+# Canal del AP de vinculación (pair). Vacío = 36, el de la consola y el que vinculaba bien en la Pi; no tiene que
+# coincidir con WIFI_CHANNEL: el mando guarda la red y luego la busca en cualquier canal.
+#DRC_PAIR_CHANNEL=36
 
 # Herramienta de gestión Wi-Fi preferida:
 #   "auto"   -> prueba con nmcli e iw automáticamente según estén instalados
