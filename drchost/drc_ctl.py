@@ -61,6 +61,10 @@ class Host:
     def is_root(self) -> bool:
         return os.geteuid() == 0
 
+    def regdb_present(self) -> bool:
+        """¿Está regulatory.db (paquete wireless-regdb)? Sin él `iw reg set` no cambia nada y el dominio queda en 00."""
+        return any(Path(d, "regulatory.db").exists() for d in ("/lib/firmware", "/usr/lib/firmware"))
+
     def user(self) -> str:
         return os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
 
@@ -455,7 +459,17 @@ def _iface_by_name(ifaces: Sequence[WifiIface], name: str) -> Optional[WifiIface
     return next((i for i in ifaces if i.name == name), None)
 
 
-def _iface_checks(host: Host, iface: str, ifaces: Sequence[WifiIface], cfg: dict, channel: int) -> List[Check]:
+def regdb_check(host: Host) -> Check:
+    if host.regdb_present():
+        return Check("regdb", "Base de datos regulatoria", OK, "regulatory.db instalada")
+    return Check("regdb", "Base de datos regulatoria", WARN,
+                 "falta regulatory.db: el dominio regulatorio se queda en «00» (mundo) aunque pidas WIFI_REGDOM, y "
+                 "el canal 36 no admite punto de acceso",
+                 "Instala wireless-regdb (Arch: sudo pacman -S wireless-regdb; Debian: sudo apt install wireless-regdb)")
+
+
+def _iface_checks(host: Host, iface: str, ifaces: Sequence[WifiIface], cfg: dict, channel: int,
+                  channel_key: str = "WIFI_CHANNEL") -> List[Check]:
     it = _iface_by_name(ifaces, iface)
     if it is None:
         found = ", ".join(i.name for i in ifaces) or "ninguna"
@@ -467,10 +481,13 @@ def _iface_checks(host: Host, iface: str, ifaces: Sequence[WifiIface], cfg: dict
                         "" if it.ap else "Usa otra tarjeta (el TP-Link USB con rtw89 sirve)."))
     if it.band5:
         usable = channel in it.channels_ok
+        fix = f"Cambia {channel_key} o WIFI_REGDOM en config/drc.conf (p. ej. WIFI_REGDOM=\"US\")."
+        if not usable and not host.regdb_present():
+            fix = "Instala wireless-regdb (sin él WIFI_REGDOM no se aplica) o " + fix[0].lower() + fix[1:]
         checks.append(Check("band", f"Canal {channel} (5 GHz)", OK if usable else FAIL,
                             "permitido por el dominio regulatorio" if usable else
                             f"el canal {channel} no se puede usar (permitidos: {', '.join(map(str, it.channels_ok[:8]))}…)",
-                            "" if usable else "Cambia WIFI_CHANNEL o WIFI_REGDOM en config/drc.conf (p. ej. WIFI_REGDOM=\"US\")."))
+                            "" if usable else fix))
     else:
         checks.append(Check("band", "5 GHz", FAIL, "la tarjeta no tiene canales de 5 GHz",
                             "El GamePad solo habla en 5 GHz: usa otra tarjeta."))
@@ -506,8 +523,8 @@ def check_pair(host: Optional[Host] = None, iface: Optional[str] = None,
     cfg = drc_ap.load_drc_conf() if cfg is None else cfg
     iface = iface or current_iface(cfg)
     ifaces = list_wifi_ifaces(host) if ifaces is None else ifaces
-    channel = int(cfg.get("WIFI_CHANNEL", 40) or 40)
-    checks = _iface_checks(host, iface, ifaces, cfg, channel) + [platform_check(cfg)]
+    channel = drc_ap.pairing_channel(cfg)   # el AP de vinculación va en su canal, no en el de la transmisión
+    checks = _iface_checks(host, iface, ifaces, cfg, channel, "DRC_PAIR_CHANNEL") + [regdb_check(host), platform_check(cfg)]
     hostapd = find_hostapd(host)
     checks.append(Check("hostapd", "hostapd con parches DRC", OK if hostapd else FAIL,
                         hostapd or "no está compilado",
@@ -605,7 +622,7 @@ def check_start(host: Optional[Host] = None, iface: Optional[str] = None, cfg: O
     checks.append(Check("paired", "GamePad emparejado", OK if paired else FAIL,
                     f"MAC {paired}" if paired else "no hay ninguna vinculación guardada",
                     "" if paired else "Empareja primero (opción «Emparejar»)."))
-    checks += _iface_checks(host, iface, ifaces, cfg, channel)
+    checks += _iface_checks(host, iface, ifaces, cfg, channel) + [regdb_check(host)]
     it = _iface_by_name(ifaces, iface)
     if it is not None:
         allow = host.env("DRC_ALLOW_NO_TSF") == "1"

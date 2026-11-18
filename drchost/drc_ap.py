@@ -391,6 +391,19 @@ def gamepad_wants_normal_network(line: str, normal_ssid: str) -> bool:
     return "MLME event frame" in line and hx in line
 
 
+def hostapd_failure_message(code: int, out: str, channel_key: str) -> str:
+    """Error de hostapd al arrancar. Si es porque el canal no admite AP (dominio regulatorio «00» sin wireless-regdb,
+    o un canal DFS/no permitido) lo dice claro; si no, devuelve el volcado."""
+    m = re.search(r"Configured channel \((\d+)\) not found", out)
+    if m:
+        ch = m.group(1)
+        return (f"hostapd no puede crear el punto de acceso en el canal {ch}: el dominio regulatorio no lo permite en modo AP.\n"
+                f"  - Comprueba «iw reg get»: si dice «country 00», falta wireless-regdb (Arch: sudo pacman -S wireless-regdb)\n"
+                f"    y WIFI_REGDOM no se aplica.\n"
+                f"  - O elige otro canal con {channel_key} en config/drc.conf (los permitidos: «iw phy» sin «No IR»).")
+    return f"hostapd terminated early with code {code}:\n{out}"
+
+
 def derive_pairing_mac_and_ssid(
     base_mac: str,
     digits: Tuple[int, int, int, int] = (0, 0, 0, 0),
@@ -938,7 +951,7 @@ def pair_gamepad_wps(
             if proc.poll() is not None:
                 out = proc.stdout.read() if proc.stdout else ""
                 log_file.write(out)
-                raise RuntimeError(f"hostapd terminated early with code {proc.returncode}:\n{out}")
+                raise RuntimeError(hostapd_failure_message(proc.returncode, out, "DRC_PAIR_CHANNEL"))
             if sock_path.exists():
                 try:
                     resp = send_hostapd_command("PING", iface=iface, timeout=0.5)
@@ -1177,7 +1190,7 @@ def start_normal_ap(
             if proc.poll() is not None:
                 out = proc.stdout.read() if proc.stdout else ""
                 log_file.write(out)
-                raise RuntimeError(f"hostapd terminated early with code {proc.returncode}:\n{out}")
+                raise RuntimeError(hostapd_failure_message(proc.returncode, out, "WIFI_CHANNEL"))
             if sock_path.exists():
                 try:
                     resp = send_hostapd_command("STATUS", iface=iface, timeout=0.5)

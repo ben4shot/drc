@@ -40,8 +40,9 @@ def _estado_aislado(tmp_path, monkeypatch):
 class FakeHost(c.Host):
     def __init__(self, tmp, phys, default_dev="wlp3s0", binaries=("hostapd", "wf-recorder", "cage", "steam",
                                                                      "Xwayland", "sudo", "pkexec", "Hyprland"),
-                 procs=(), root=False, env=None):
+                 procs=(), root=False, env=None, regdb=True):
         super().__init__(sys_net=tmp / "net")
+        self.regdb = regdb
         self.phys, self.default_dev, self.bins, self.procs, self.root = phys, default_dev, set(binaries), set(procs), root
         self._env = env or {}
 
@@ -50,6 +51,9 @@ class FakeHost(c.Host):
 
     def is_root(self):
         return self.root
+
+    def regdb_present(self):
+        return self.regdb
 
     def user(self):
         return "tester"
@@ -156,7 +160,7 @@ def test_canal_no_permitido_falla(tmp_path):
     make_net(tmp_path, {"wlan9": "phy10"})
     host = FakeHost(tmp_path, {"phy10": IW_PHY})
     c.find_hostapd = lambda h: "/x/hostapd"
-    k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {"WIFI_CHANNEL": "52"}, c.list_wifi_ifaces(host))}
+    k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {"DRC_PAIR_CHANNEL": "52"}, c.list_wifi_ifaces(host))}
     assert k["band"].status == c.FAIL and "WIFI_REGDOM" in k["band"].fix
 
 
@@ -413,3 +417,29 @@ def test_cage_sin_wlr_randr_avisa_de_la_resolucion(tmp_path):
     host = FakeHost(tmp_path, {}, binaries=("cage", "wf-recorder", "wlr-randr"))
     chk = {k.key: k for k in c._session_tool_checks(host, {"DESKTOP_SESSION": "cage"})}
     assert chk["resolution"].status == c.OK and "854x480" in chk["resolution"].detail
+
+
+def test_emparejar_comprueba_el_canal_de_vinculacion_no_el_de_transmision(tmp_path):
+    """check_pair mira el canal del AP de vinculación (DRC_PAIR_CHANNEL, 36 por defecto), no WIFI_CHANNEL."""
+    make_net(tmp_path, {"wlan9": "phy10"})
+    host = FakeHost(tmp_path, {"phy10": IW_PHY})
+    c.find_hostapd = lambda h: "/x/hostapd"
+    k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {"WIFI_CHANNEL": "40"}, c.list_wifi_ifaces(host))}
+    assert k["band"].name.startswith("Canal 36")
+    k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {"WIFI_CHANNEL": "40", "DRC_PAIR_CHANNEL": "52"},
+                                        c.list_wifi_ifaces(host))}
+    assert k["band"].status == c.FAIL and "DRC_PAIR_CHANNEL" in k["band"].fix
+
+
+def test_sin_wireless_regdb_se_avisa(tmp_path):
+    """Sin regulatory.db el dominio se queda en 00 (iw reg set no hace nada) y el 36 no admite AP: se dice qué instalar."""
+    make_net(tmp_path, {"wlan9": "phy10"})
+    c.find_hostapd = lambda h: "/x/hostapd"
+    host = FakeHost(tmp_path, {"phy10": IW_PHY}, regdb=False)
+    k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {}, c.list_wifi_ifaces(host))}
+    assert k["regdb"].status == c.WARN and "wireless-regdb" in k["regdb"].fix
+    k = {x.key: x for x in c.check_start(host, "wlan9", {}, c.list_wifi_ifaces(host))}
+    assert k["regdb"].status == c.WARN
+    host = FakeHost(tmp_path, {"phy10": IW_PHY})
+    k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {}, c.list_wifi_ifaces(host))}
+    assert k["regdb"].status == c.OK

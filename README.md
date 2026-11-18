@@ -42,7 +42,7 @@ Ejecutar (obligatorio):
 
 | | Arch | Debian / Ubuntu / Raspberry Pi OS |
 |---|---|---|
-| Wi-Fi y red | `iw iproute2 networkmanager rfkill ethtool` | `iw iproute2 network-manager rfkill ethtool` |
+| Wi-Fi y red | `iw iproute2 networkmanager rfkill ethtool wireless-regdb` | `iw iproute2 network-manager rfkill ethtool wireless-regdb` |
 | Captura de pantalla | `wf-recorder wlr-randr` | `wf-recorder wlr-randr` |
 | Compositor del mando (`--mode separate`) | `cage` | `cage` |
 | Audio | `pipewire-pulse alsa-utils` | `pulseaudio-utils pipewire-bin alsa-utils` |

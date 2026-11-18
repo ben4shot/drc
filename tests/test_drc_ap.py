@@ -560,3 +560,15 @@ def test_aviso_red_normal_solo_con_tramas_del_mando():
     probe = f"nl80211: MLME event frame - hexdump(len=123): 40 00 00 00 ff ff ff ff ff ff 02 aa bb cc dd ee ff ff ff ff ff ff 30 00 00 10 {hx} 01 08"
     assert gamepad_wants_normal_network(probe, ssid)
     assert gamepad_wants_normal_network("nl80211: Data/PS-poll frame from 02:aa:bb:cc:dd:ee", ssid)
+
+
+def test_hostapd_sin_canal_da_un_error_que_se_entiende():
+    """Si hostapd no arranca porque el canal no admite AP, el error dice el canal y qué hacer, no solo el volcado."""
+    from drchost.drc_ap import hostapd_failure_message
+    out = ("channel [0] (36) is disabled for use in AP mode, flags: 0x857 NO-IBSS PASSIVE-SCAN\n"
+           "wlp1s0: IEEE 802.11 Configured channel (36) not found from the channel list of current mode (2) IEEE 802.11a\n"
+           "Could not select hw_mode and channel. (-3)\n")
+    msg = hostapd_failure_message(1, out, "DRC_PAIR_CHANNEL")
+    assert "canal 36" in msg and "wireless-regdb" in msg and "DRC_PAIR_CHANNEL" in msg
+    otro = hostapd_failure_message(1, "Line 3: invalid line\n", "WIFI_CHANNEL")
+    assert "invalid line" in otro and "wireless-regdb" not in otro
