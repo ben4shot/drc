@@ -484,6 +484,9 @@ def _iface_checks(host: Host, iface: str, ifaces: Sequence[WifiIface], cfg: dict
         fix = f"Cambia {channel_key} o WIFI_REGDOM en config/drc.conf (p. ej. WIFI_REGDOM=\"US\")."
         if not usable and not host.regdb_present():
             fix = "Instala wireless-regdb (sin él WIFI_REGDOM no se aplica) o " + fix[0].lower() + fix[1:]
+        elif not usable:
+            fix = ("Si acabas de instalar wireless-regdb, el kernel no la relee solo: sudo iw reg reload (o reinicia) y "
+                   "sudo iw reg set <país>. Si no, c" + fix[1:])
         checks.append(Check("band", f"Canal {channel} (5 GHz)", OK if usable else FAIL,
                             "permitido por el dominio regulatorio" if usable else
                             f"el canal {channel} no se puede usar (permitidos: {', '.join(map(str, it.channels_ok[:8]))}…)",

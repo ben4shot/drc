@@ -399,7 +399,8 @@ def hostapd_failure_message(code: int, out: str, channel_key: str) -> str:
         ch = m.group(1)
         return (f"hostapd no puede crear el punto de acceso en el canal {ch}: el dominio regulatorio no lo permite en modo AP.\n"
                 f"  - Comprueba «iw reg get»: si dice «country 00», falta wireless-regdb (Arch: sudo pacman -S wireless-regdb)\n"
-                f"    y WIFI_REGDOM no se aplica.\n"
+                f"    y WIFI_REGDOM no se aplica. Recién instalada, el kernel no la relee solo: sudo iw reg reload\n"
+                f"    (o reiniciar) y después sudo iw reg set <país>.\n"
                 f"  - O elige otro canal con {channel_key} en config/drc.conf (los permitidos: «iw phy» sin «No IR»).")
     return f"hostapd terminated early with code {code}:\n{out}"
 

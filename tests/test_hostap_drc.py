@@ -95,3 +95,24 @@ def test_hostapd_and_wpa_supplicant_build_on_rpi4():
         text=True,
     )
     assert res_t.returncode == 0, "CONFIG_TENDONIN no está presente en las configuraciones remotas"
+
+
+def test_ap_de_vinculacion_anuncia_el_wps_con_el_oui_de_nintendo(tmp_path: Path):
+    """El mando, al vincular, solo prueba los AP con un IE de WPS «dd .. a4 c0 e1 f4» (LVC FUN_0007f28e) y descarta
+    los que solo traen el estándar 00:50:f2:04. Tras configure_hostap_drc, wps_registrar.c añade a beacon y probe
+    response una copia de cada IE de WPS con el OUI de Nintendo (con CONFIG_TENDONIN). Idempotente."""
+    from drchost.patch_hostap_drc import patch_wps_registrar
+    src = (LOCAL_HOSTAP_DIR / "src" / "wps" / "wps_registrar.c").read_text(encoding="utf-8")
+    out = patch_wps_registrar(src)
+    assert "WPS_DEV_OUI_NIN" in out and "wps_ie_add_nintendo" in out
+    assert out.count("beacon = wps_ie_add_nintendo(beacon);") == 1
+    assert out.count("probe = wps_ie_add_nintendo(probe);") == 1
+    # la copia va detrás del encapsulado estándar y solo con CONFIG_TENDONIN
+    i = out.index("probe = wps_ie_encapsulate(probe);")
+    assert out.index("#ifdef CONFIG_TENDONIN", i) < out.index("beacon = wps_ie_add_nintendo(beacon);")
+    assert patch_wps_registrar(out) == out
+
+    temp_hostap = tmp_path / "drc-hostap"
+    shutil.copytree(LOCAL_HOSTAP_DIR, temp_hostap)
+    configure_hostap_drc(temp_hostap)
+    assert "wps_ie_add_nintendo" in (temp_hostap / "src" / "wps" / "wps_registrar.c").read_text(encoding="utf-8")

@@ -24,6 +24,10 @@ a `drc` (o al revés) hay que volver a vincularlo.
 
 Pulsar SYNC detrás del mando abre la pantalla de símbolos.
 
+Cómo elige el mando la red al vincular **[firmware]** (LVC `FUN_0001f4cc`): escanea, prueba el WPS con cada AP de la lista (BSSID y canal, `FUN_00087054`) y, con el que acepta el PIN, mira el SSID de ese AP con un `strstr`: si contiene `_STA1` es el mando 1 y si contiene `_STA2`, el 2 (`FUN_0001f2a0`). No se ha visto ninguna otra comprobación del nombre (ni el prefijo `WiiU` ni las cifras de la MAC).
+
+**El AP de vinculación tiene que anunciar el WPS con el OUI de Nintendo** **[firmware]** **[mando]**: la lista del escaneo (`FUN_0007f464` → `FUN_0007f28e`) solo conserva los AP con un IE `dd .. a4 c0 e1 f4` (el IE de WPS con el OUI de Nintendo en vez de `00 50 f2 04`) y exige también el IE de Broadcom `00 90 4c` tipo 7 (`FUN_0007f324`). Dentro de ese IE lee los atributos WPS de siempre: versión (0x104a), estado (0x1044), registrador seleccionado (0x1041) e ID de contraseña (0x1012; 4 = pulsador). Sin él, el mando escanea, no ve ningún AP válido, muestra un error y vuelve a la pantalla de los símbolos, sin mandar ni una trama al AP. `drchost/patch_hostap_drc.py` hace que hostapd añada una copia con ese OUI de cada IE de WPS en el beacon y la probe response; con ella el mando vincula (PC con el TP-Link, 2026-11-17: M1–M8 y `WPS-REG-SUCCESS`).
+
 `drc` levanta el AP de vinculación en el **canal 36** (`DRC_PAIR_CHANNEL`), aparte del de la transmisión (`WIFI_CHANNEL`) **[mando]**: en la Raspberry Pi se vinculaba bien en el 36; con el AP en el 40 (PC con TP-Link) el mando, tras pulsar SYNC, no envió ninguna trama en ese canal. Que el mando solo busque en el 36 durante la vinculación es una **[hipótesis]**.
 
 ## El enlace de la consola [consola]

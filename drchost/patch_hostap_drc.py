@@ -1,6 +1,7 @@
 """
 patch_hostap_drc.py - Configura hostapd y wpa_supplicant para usar TLS interno
-y LibTomMath en ARM64, eliminando la dependencia de openssl-1.0.1u.
+y LibTomMath en ARM64, eliminando la dependencia de openssl-1.0.1u, y hace que el AP de
+vinculación anuncie el WPS con el OUI de Nintendo (el GamePad solo vincula con esos AP).
 """
 from pathlib import Path
 import re
@@ -49,6 +50,59 @@ def patch_defconfig(content: str) -> str:
     return "\n".join(lines + extra) + "\n"
 
 
+NINTENDO_WPS_HELPER = r"""
+#ifdef CONFIG_TENDONIN
+/* drc: el GamePad, al vincular, solo prueba los AP con el IE de WPS de Nintendo (a4:c0:e1:f4; LVC
+ * FUN_0007f28e) y descarta los que traen solo el estándar 00:50:f2:04. Se añade una copia de cada IE de
+ * WPS con ese OUI detrás de los estándar. */
+static struct wpabuf * wps_ie_add_nintendo(struct wpabuf *ie)
+{
+	struct wpabuf *out;
+	const u8 *pos, *end;
+
+	if (ie == NULL)
+		return NULL;
+	out = wpabuf_alloc(2 * wpabuf_len(ie));
+	if (out == NULL)
+		return ie;
+	wpabuf_put_buf(out, ie);
+	pos = wpabuf_head(ie);
+	end = pos + wpabuf_len(ie);
+	while (end - pos >= 6) {
+		u8 len = pos[1];
+		if (len < 4 || pos + 2 + len > end)
+			break;
+		if (pos[0] == WLAN_EID_VENDOR_SPECIFIC && WPA_GET_BE32(pos + 2) == WPS_DEV_OUI_WFA) {
+			wpabuf_put_u8(out, WLAN_EID_VENDOR_SPECIFIC);
+			wpabuf_put_u8(out, len);
+			wpabuf_put_be32(out, WPS_DEV_OUI_NIN);
+			wpabuf_put_data(out, pos + 6, len - 4);
+		}
+		pos += 2 + len;
+	}
+	wpabuf_free(ie);
+	return out;
+}
+#endif /* CONFIG_TENDONIN */
+
+"""
+
+ENCAPSULATE = "\tbeacon = wps_ie_encapsulate(beacon);\n\tprobe = wps_ie_encapsulate(probe);\n"
+ADD_NINTENDO = ("#ifdef CONFIG_TENDONIN\n\tbeacon = wps_ie_add_nintendo(beacon);\n"
+                "\tprobe = wps_ie_add_nintendo(probe);\n#endif /* CONFIG_TENDONIN */\n")
+
+
+def patch_wps_registrar(content: str) -> str:
+    """wps_registrar.c: beacon y probe response del AP llevan también el IE de WPS con el OUI de Nintendo."""
+    if "wps_ie_add_nintendo" in content:
+        return content
+    anchor = "static int wps_set_ie(struct wps_registrar *reg)\n{"
+    if content.count(anchor) != 1 or content.count(ENCAPSULATE) != 1:
+        raise ValueError("wps_registrar.c no tiene la forma esperada (wps_set_ie / wps_ie_encapsulate)")
+    content = content.replace(anchor, NINTENDO_WPS_HELPER.lstrip("\n") + anchor)
+    return content.replace(ENCAPSULATE, ENCAPSULATE + ADD_NINTENDO)
+
+
 def configure_hostap_drc(hostap_dir: Path):
     """Crea y actualiza .config para hostapd y wpa_supplicant."""
     hostap_dir = Path(hostap_dir)
@@ -61,6 +115,9 @@ def configure_hostap_drc(hostap_dir: Path):
         orig = defconfig.read_text(encoding="utf-8")
         patched = patch_defconfig(orig)
         (hostap_dir / sub / ".config").write_text(patched, encoding="utf-8")
+
+    reg = hostap_dir / "src" / "wps" / "wps_registrar.c"
+    reg.write_text(patch_wps_registrar(reg.read_text(encoding="utf-8")), encoding="utf-8")
 
 
 if __name__ == "__main__":
