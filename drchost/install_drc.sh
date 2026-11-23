@@ -63,4 +63,4 @@ run ssh -o BatchMode=yes "${HOST}" "sudo mkdir -p ${DEST} /etc/drc/platforms \
 && sudo install -m 644 ${STAGE}/drc-ausencia.service /etc/systemd/system/drc-ausencia.service \
 && sudo mkdir -p /etc/systemd/system/drc.service.d \
 && sudo install -m 644 ${STAGE}/drc-wake-al-parar.conf /etc/systemd/system/drc.service.d/zzzz-wake-al-parar.conf \
-&& sudo systemctl daemon-reload && sudo systemctl enable drc"
+&& sudo systemctl daemon-reload && sudo systemctl disable drc && sudo systemctl enable drc-wake"

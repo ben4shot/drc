@@ -443,3 +443,45 @@ def test_sin_wireless_regdb_se_avisa(tmp_path):
     host = FakeHost(tmp_path, {"phy10": IW_PHY})
     k = {x.key: x for x in c.check_pair(host, "wlan9", (0, 0, 0, 0), {}, c.list_wifi_ifaces(host))}
     assert k["regdb"].status == c.OK
+
+
+def test_emparejar_y_transmitir_en_una_sola_orden(tmp_path):
+    """Con start_mode, la vinculación sigue sin pausa con la sesión (start_drc.sh) si sale bien (&&), en una sola
+    orden con privilegios: una sola contraseña en la GUI, y stop (pkill start_drc.sh) la sigue parando."""
+    h = FakeHost(tmp_path, {})
+    cmd = c.pair_command(h, "wlan9", (0, 1, 2, 3), start_mode="separate")
+    assert cmd[0] == "sudo" and "DRC_DESKTOP_USER=tester" in cmd and cmd[-3:-1] == ["bash", "-c"]
+    script = cmd[-1]
+    pair, start = script.split(" && exec ")
+    assert "drc_ap.py --pair --iface wlan9 --symbols 0,1,2,3" in pair
+    assert start.endswith("start_drc.sh --iface wlan9 --mode separate")
+    assert c.pair_command(h, "wlan9", (0, 0, 0, 0), gui=True, start_mode="mirror")[0] == "pkexec"
+
+
+def _menu_pair(tmp_path, monkeypatch, start_checks):
+    make_net(tmp_path, {"wlan9": "phy10"})
+    host = FakeHost(tmp_path, {"phy10": IW_PHY})
+    c.find_hostapd = lambda h: "/x/hostapd"
+    monkeypatch.setattr(c, "STATE_FILE", tmp_path / "ctl.json")
+    monkeypatch.setattr(c.drc_ap, "load_drc_conf", lambda *a, **k: {"WIFI_IFACE": "wlan9", "DRC_MODE": "separate"})
+    monkeypatch.setattr(c, "list_wifi_ifaces", lambda h=None: c.__dict__["_orig_list"](host))
+    monkeypatch.setattr(c, "check_start", lambda *a, **k: start_checks)
+    entradas = iter(["1", "0,0,0,0", "", "7"])
+    salida, lanzado = [], []
+    c.menu(host, lambda p="": next(entradas), salida.append, lambda cmd: lanzado.append(cmd) or 0, interactive=False)
+    return "\n".join(salida), lanzado
+
+
+def test_menu_emparejar_arranca_la_transmision_al_terminar(tmp_path, monkeypatch):
+    """Si para transmitir solo falta el emparejamiento, el menú empareja y transmite seguido."""
+    texto, lanzado = _menu_pair(tmp_path, monkeypatch, [c.Check("paired", "GamePad emparejado", c.FAIL, "no")])
+    assert lanzado and "start_drc.sh --iface wlan9 --mode separate" in lanzado[0][-1]
+    assert "empezará la transmisión" in texto
+
+
+def test_menu_emparejar_sin_transmitir_si_falta_otra_cosa(tmp_path, monkeypatch):
+    """Si falta algo más para transmitir (p. ej. drc_stream), solo empareja y dice qué falta."""
+    texto, lanzado = _menu_pair(tmp_path, monkeypatch, [c.Check("paired", "GamePad emparejado", c.FAIL, "no"),
+                                                        c.Check("drc_stream", "drc_stream", c.FAIL, "no", "compila")])
+    assert lanzado and "start_drc.sh" not in " ".join(lanzado[0]) and "--pair" in lanzado[0]
+    assert "drc_stream" in texto

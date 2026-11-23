@@ -37,11 +37,14 @@ struct Event {
   // Return true to keep the event, false to drop it.
   typedef std::function<bool(Event*)> CallbackType;
 
-  Event() : fd(-1) {}
+  Event() : fd(-1), read_size(0), value(0) {}
   ~Event() { if (fd != -1) close(fd); }
 
   int fd;
   int read_size;
+  // Último u64 leído del fd (read_size == 8): en un timerfd, los vencimientos desde la lectura
+  // anterior (>1 = el callback llegó tarde y se saltó ticks); en un eventfd, el contador.
+  u64 value;
   CallbackType callback;
 };
 

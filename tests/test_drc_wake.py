@@ -270,7 +270,80 @@ def test_vigia_para_drc_cuando_el_mando_falta():
 def test_unidad_del_vigia_va_atada_a_drc():
     u = _unidad("drc-ausencia.service")
     assert "BindsTo=drc.service" in u and "After=drc.service" in u
-    assert "--ausencia" in u
+    assert "--ausencia" in u and "--iface" not in u
     d = _unidad("systemd/drc-wake-al-parar.conf")
     assert "Wants=drc-ausencia.service" in d
     assert "drc-ausencia.service" in _unidad("install_drc.sh")
+
+
+def test_unidad_wake_usa_interfaz_auto_y_instalador_habilita_wake():
+    u = _unidad("drc-wake.service")
+    assert "--iface" not in u
+    s = _unidad("install_drc.sh")
+    assert "systemctl disable drc" in s
+    assert "systemctl enable drc-wake" in s
+
+
+def test_interfaz_configurada_respeta_dropins_y_drc_conf(tmp_path):
+    dd = tmp_path / "drc.service.d"
+    dd.mkdir()
+    (dd / "wlan1.conf").write_text("[Service]\nEnvironment=DRC_IFACE=wlan1\n")
+    assert w.interfaz_configurada(drop_dir=str(dd), conf_path=str(tmp_path / "no.conf")) == "wlan1"
+    (dd / "zzz-wlan0.conf").write_text("[Service]\nEnvironment=DRC_IFACE=wlan0\n")
+    assert w.interfaz_configurada(drop_dir=str(dd), conf_path=str(tmp_path / "no.conf")) == "wlan0"
+    conf = tmp_path / "drc.conf"
+    conf.write_text('WIFI_IFACE="wlan0"\n')
+    assert w.interfaz_configurada(drop_dir=str(tmp_path / "vacio"), conf_path=str(conf)) == "wlan0"
+
+
+def test_soporta_monitor_parsea_iw_phy():
+    con_mon = "\tSupported interface modes:\n\t\t * managed\n\t\t * AP\n\t\t * monitor\n\tBand 1:\n"
+    sin_mon = "\tSupported interface modes:\n\t\t * IBSS\n\t\t * managed\n\t\t * AP\n\tBand 1:\n"
+    assert w.soporta_monitor("wlan1", leer_phy=lambda _: "phy2", ejecutar=lambda _: con_mon) is True
+    assert w.soporta_monitor("wlan0", leer_phy=lambda _: "phy0", ejecutar=lambda _: sin_mon) is False
+    assert w.soporta_monitor("wlan9", leer_phy=lambda _: "", ejecutar=lambda _: con_mon) is False
+
+
+def test_vigilar_ap_levanta_hostapd_detecta_mando_y_arranca_drc(tmp_path):
+    ap_conf = tmp_path / "generated_ap_normal.conf"
+    ap_conf.write_text("ssid=WiiUd83add56c500\ninterface=wlan1\nchannel=40\n")
+
+    class _FakeProc:
+        def __init__(self):
+            self.terminated = False
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    proc = _FakeProc()
+    lanzados = []
+    ejecutadas = []
+
+    def fake_popen(cmd):
+        lanzados.append((cmd, open(cmd[1]).read()))
+        return proc
+
+    volcados = iter(["", "", f"Station {PAD.hex(':')} (on wlan0)\n"])
+    ok = w.vigilar_ap(
+        "wlan0",
+        PAD,
+        ap_conf=str(ap_conf),
+        hostapd_bin="/usr/bin/fake-hostapd",
+        ejecutar=lambda o, **k: ejecutadas.append(o),
+        lanzar=fake_popen,
+        leer=lambda: next(volcados),
+        dormir=lambda _: None,
+    )
+    assert ok is True
+    assert proc.terminated is True
+    assert lanzados and "interface=wlan0" in lanzados[0][1]
+    assert ["ip", "link", "set", "dev", "wlan0", "address", "d8:3a:dd:56:c5:00"] in ejecutadas
+    assert ejecutadas[-1] == ["systemctl", "start", "--no-block", "drc"]

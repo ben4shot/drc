@@ -866,10 +866,12 @@ int main() {
     CHECK(drc::AudioPacketSamplesFromEnv(nullptr) == 384);
     CHECK(drc::AudioPacketSamplesFromEnv("") == 384);
     CHECK(drc::AudioPacketSamplesFromEnv("384") == 384);
+    CHECK(drc::AudioPacketSamplesFromEnv("336") == 336);
     CHECK(drc::AudioPacketSamplesFromEnv("192") == 192);
     CHECK(drc::AudioPacketSamplesFromEnv("100") == 384);
     CHECK(drc::AudioPacketSamplesFromEnv("abc") == 384);
     CHECK(drc::AudioPacketIntervalMs(192) == 4);
+    CHECK(drc::AudioPacketIntervalMs(336) == 7);
     CHECK(drc::AudioPacketIntervalMs(384) == 8);
     printf("SUCCESS\n");
     return 0;
@@ -958,6 +960,174 @@ int main() {
     run_res = subprocess.run([str(bin_file)], capture_output=True, text=True)
     assert run_res.returncode == 0, f"Fallo en aserciones:\n{run_res.stderr}"
     assert "SUCCESS" in run_res.stdout
+
+
+def _build_and_run_cpp(tmp_path: Path, name: str, cpp_source: str, extra_sources=()):
+    src_file = tmp_path / f"{name}.cpp"
+    bin_file = tmp_path / name
+    src_file.write_text(cpp_source)
+    build_res = subprocess.run(
+        ["g++", "-std=c++11", "-O2", f"-I{LIBDRC_INCLUDE}", str(src_file), *map(str, extra_sources),
+         "-pthread", "-o", str(bin_file)],
+        capture_output=True, text=True,
+    )
+    assert build_res.returncode == 0, f"Error de compilación:\n{build_res.stderr}"
+    run_res = subprocess.run([str(bin_file)], capture_output=True, text=True, timeout=30)
+    assert run_res.returncode == 0, f"Fallo en aserciones:\n{run_res.stderr}"
+    assert "SUCCESS" in run_res.stdout
+    return run_res.stdout
+
+
+def test_audio_queue_stats(tmp_path: Path):
+    """Prueba 160 (B19 Paso 2): `AudioQueue::TakeStats()` cuenta, desde la última llamada, el silencio
+    de relleno (muestras que faltaban en Pop), los Pop cortos y los vacíos, las muestras tiradas por el
+    tope de 100 ms y el nivel mínimo (antes de cada Pop) y máximo (tras cada Push) de la cola. Al
+    tomarlas se reinician; sin Pop, el mínimo es el nivel actual."""
+    _build_and_run_cpp(tmp_path, "test_audio_stats", r"""#include <cstdio>
+#include <vector>
+#include <drc/internal/audio-queue.h>
+
+#define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
+
+int main() {
+    drc::AudioQueue q;
+    std::vector<drc::s16> out;
+
+    drc::AudioQueueStats s = q.TakeStats();
+    CHECK(s.underrun_samples == 0 && s.dropped_samples == 0 && s.pops == 0);
+    CHECK(s.short_pops == 0 && s.empty_pops == 0 && s.min_level == 0 && s.max_level == 0);
+
+    q.Push(std::vector<drc::s16>(960));      // 10 ms
+    q.Pop(&out, 672);                         // 7 ms: completo
+    q.Pop(&out, 672);                         // quedan 288: corto, 384 de relleno
+    q.Pop(&out, 672);                         // vacío: 672 de relleno
+    s = q.TakeStats();
+    CHECK(s.pops == 3);
+    CHECK(s.short_pops == 2);
+    CHECK(s.empty_pops == 1);
+    CHECK(s.underrun_samples == 384 + 672);
+    CHECK(s.dropped_samples == 0);
+    CHECK(s.min_level == 0);
+    CHECK(s.max_level == 960);
+
+    // Reiniciadas; sin Pop el mínimo es el nivel actual.
+    q.Push(std::vector<drc::s16>(9600 + 500));  // pasa el tope: se tiran 500
+    s = q.TakeStats();
+    CHECK(s.pops == 0 && s.underrun_samples == 0);
+    CHECK(s.dropped_samples == 500);
+    CHECK(s.max_level == 9600);
+    CHECK(s.min_level == 9600);
+
+    q.Push(std::vector<drc::s16>(100));          // +100 sobre 9600: 100 tiradas
+    q.Pop(&out, 672);
+    s = q.TakeStats();
+    CHECK(s.dropped_samples == 100);
+    CHECK(s.min_level == 9600);
+    CHECK(s.short_pops == 0 && s.underrun_samples == 0 && s.pops == 1);
+
+    printf("SUCCESS\n");
+    return 0;
+}
+""")
+
+
+def test_audio_diag_log_and_format(tmp_path: Path):
+    """Prueba 161 (B19 Paso 2): diagnóstico de audio de 1 s. `AudioDiagAnomalous` = hubo relleno,
+    muestras tiradas o vencimientos del temporizador perdidos; `AudioDiagShouldLog` escribe cada
+    segundo con anomalía y, si no, un resumen cada 10 s. `FormatAudioDiag` da la línea `[audio] ...`
+    en ms (96 s16 = 1 ms estéreo a 48 kHz). `TimerMissedTicks(n)` = vencimientos que el callback no
+    atendió (n − 1)."""
+    _build_and_run_cpp(tmp_path, "test_audio_diag", r"""#include <cstdio>
+#include <string>
+#include <drc/internal/audio-queue.h>
+
+#define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
+
+int main() {
+    CHECK(drc::TimerMissedTicks(0) == 0);
+    CHECK(drc::TimerMissedTicks(1) == 0);
+    CHECK(drc::TimerMissedTicks(5) == 4);
+
+    drc::AudioDiag d;
+    d.q.pops = 143; d.q.min_level = 48; d.q.max_level = 960;
+    d.max_gap_us = 7300;
+    CHECK(!drc::AudioDiagAnomalous(d));
+    CHECK(!drc::AudioDiagShouldLog(d, 1));
+    CHECK(!drc::AudioDiagShouldLog(d, 9));
+    CHECK(drc::AudioDiagShouldLog(d, 10));
+
+    drc::AudioDiag u = d; u.q.underrun_samples = 115; u.q.short_pops = 3; u.q.empty_pops = 1;
+    CHECK(drc::AudioDiagAnomalous(u) && drc::AudioDiagShouldLog(u, 1));
+    drc::AudioDiag t = d; t.q.dropped_samples = 1;
+    CHECK(drc::AudioDiagAnomalous(t));
+    drc::AudioDiag m = d; m.missed_ticks = 2;
+    CHECK(drc::AudioDiagAnomalous(m));
+
+    std::string line = drc::FormatAudioDiag(u);
+    fprintf(stderr, "%s\n", line.c_str());
+    CHECK(line.find("[audio]") == 0);
+    CHECK(line.find("relleno=1.2ms") != std::string::npos);
+    CHECK(line.find("cortos=3/143") != std::string::npos);
+    CHECK(line.find("vacios=1") != std::string::npos);
+    CHECK(line.find("tirado=0.0ms") != std::string::npos);
+    CHECK(line.find("perdidos=0") != std::string::npos);
+    CHECK(line.find("hueco_max=7.3ms") != std::string::npos);
+    CHECK(line.find("cola=0.5..10.0ms") != std::string::npos);
+
+    printf("SUCCESS\n");
+    return 0;
+}
+""")
+
+
+def test_timer_event_reports_expirations(tmp_path: Path):
+    """Prueba 162 (B19 Paso 2): el `EventMachine` guarda en `Event::value` lo leído del timerfd (los
+    vencimientos desde la última lectura). Antes se leía y se descartaba: si el hilo del audio llegaba
+    tarde, se perdían paquetes sin que nada lo dijera. Temporizador de 2 ms; el primer callback se
+    entretiene 11 ms; el segundo ve ≥ 4 vencimientos."""
+    src = LIBDRC_INCLUDE.parent / "src" / "events.cpp"
+    _build_and_run_cpp(tmp_path, "test_timer_exp", r"""#include <cstdio>
+#include <thread>
+#include <chrono>
+#include <drc/internal/events.h>
+
+#define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
+
+int main() {
+    drc::EventMachine em;
+    int calls = 0;
+    unsigned long long first = 0, second = 0;
+    em.NewRepeatedTimerEvent(2000000, [&](drc::Event* e) {
+        calls++;
+        if (calls == 1) {
+            first = e->value;
+            std::this_thread::sleep_for(std::chrono::milliseconds(11));
+        } else if (calls == 2) {
+            second = e->value;
+            em.StopEM();
+        }
+        return true;
+    });
+    em.StartEM();
+    fprintf(stderr, "first=%llu second=%llu\n", first, second);
+    CHECK(first >= 1);
+    CHECK(second >= 4);
+    printf("SUCCESS\n");
+    return 0;
+}
+""", extra_sources=[src])
+
+
+def test_audio_streamer_aplica_drc_tos():
+    """Prueba 165 (B19): el socket de los datos de audio (AudioStreamer) también lleva DRC_TOS. Antes solo
+    lo aplicaba VideoStreamer (vídeo y astrm de formato) y el audio salía con TID 0 (best effort), en la
+    misma cola que el vídeo; la consola manda todo al mando con TID 5 (AC_VI: TOS 0xa0). Con pérdidas en
+    el aire (`tx failed` en wlan0) los paquetes de audio perdidos se oían como cortes."""
+    src = (LIBDRC_INCLUDE.parent / "src" / "audio-streamer.cpp").read_text()
+    start = src[src.index("bool AudioStreamer::Start()"):]
+    start = start[:start.index("\n}\n")]
+    assert 'TosFromEnv(getenv("DRC_TOS"))' in start
+    assert "astrm_client_->SetTos(" in start
 
 
 def test_idr_min_ticks_from_env_and_long_cooldown(tmp_path: Path):

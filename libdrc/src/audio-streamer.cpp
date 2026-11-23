@@ -26,6 +26,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <drc/internal/audio-queue.h>
 #include <drc/internal/astrm-packet.h>
 #include <drc/internal/audio-streamer.h>
 #include <drc/internal/events.h>
@@ -96,6 +98,12 @@ bool AudioStreamer::Start() {
     Stop();
     return false;
   }
+  // B19: misma prioridad Wi-Fi que el vídeo (DRC_TOS; 0xa0 = TID 5, AC_VI, como la consola). Sin esto los
+  // datos de audio salían con TID 0 aunque el vídeo llevara DRC_TOS.
+  const int tos = TosFromEnv(getenv("DRC_TOS"));
+  if (tos >= 0 && !astrm_client_->SetTos(tos)) {
+    fprintf(stderr, "[libdrc] IP_TOS del audio falló\n");
+  }
   StartEM();
   return true;
 }
@@ -122,7 +130,36 @@ void AudioStreamer::InitEventsAndRun() {
   const char* silence_env = getenv("DRC_AUDIO_SEND_SILENCE");
   const bool send_silence = (silence_env == NULL || strcmp(silence_env, "0") != 0);
 
-  NewRepeatedTimerEvent(kPacketIntervalMs * 1000000, [&](Event*) {
+  // B19: diagnóstico de 1 s (relleno, tirado, ticks perdidos, hueco máximo, nivel de la cola).
+  // Una línea [audio] por segundo con anomalía y un resumen cada 10 s. DRC_AUDIO_DIAG=0 lo apaga.
+  const char* diag_env = getenv("DRC_AUDIO_DIAG");
+  const bool diag = (diag_env == NULL || strcmp(diag_env, "0") != 0);
+  AudioDiag acc;
+  u64 last_tick_us = 0;
+  u64 window_start_ms = NowMs();
+  unsigned seconds_since_log = 0;
+
+  NewRepeatedTimerEvent(kPacketIntervalMs * 1000000, [&](Event* evt) {
+    if (diag) {
+      const u64 now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      if (last_tick_us && now_us - last_tick_us > acc.max_gap_us) {
+        acc.max_gap_us = now_us - last_tick_us;
+      }
+      last_tick_us = now_us;
+      acc.missed_ticks += TimerMissedTicks(evt->value);
+      if (now_us / 1000 - window_start_ms >= 1000) {
+        window_start_ms = now_us / 1000;
+        acc.q = samples_.TakeStats();
+        seconds_since_log++;
+        if (AudioDiagShouldLog(acc, seconds_since_log)) {
+          fprintf(stderr, "%s\n", FormatAudioDiag(acc).c_str());
+          seconds_since_log = 0;
+        }
+        acc = AudioDiag();
+      }
+    }
+
     std::vector<s16> samples;
     samples_.Pop(&samples, kSamplesPerPacket * 2);
     // El motor se apaga solo a los 18 ms sin paquetes: mientras vibra se envía aunque haya silencio.

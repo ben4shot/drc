@@ -143,6 +143,9 @@ void EventMachine::ProcessEvents() {
                           "(fd:%d, size:%d): %s\n", evt->fd, evt->read_size,
                           strerror(errno));
         }
+        else if (evt->read_size == sizeof (u64)) {
+          memcpy(&evt->value, buffer.data(), sizeof (u64));
+        }
       }
 
       bool keep = evt->callback(evt);

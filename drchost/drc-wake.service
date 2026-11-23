@@ -5,8 +5,7 @@ After=network-pre.target
 
 [Service]
 Type=simple
-# Interfaz y canal: WIFI_IFACE y WIFI_CHANNEL de /etc/drc/drc.conf. Si la interfaz aún no existe, falla y
-# Restart= lo vuelve a intentar.
+# Interfaz y canal: drop-ins de drc.service o WIFI_IFACE/WIFI_CHANNEL de /etc/drc/drc.conf.
 ExecStart=/opt/drc/drc_wake.py --mando auto --saltar
 Restart=on-failure
 RestartSec=5

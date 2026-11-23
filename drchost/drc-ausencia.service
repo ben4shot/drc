@@ -5,6 +5,6 @@ After=drc.service
 
 [Service]
 Type=simple
-# Interfaz: WIFI_IFACE de /etc/drc/drc.conf
+# Interfaz: drop-ins de drc.service o WIFI_IFACE de /etc/drc/drc.conf
 ExecStart=/opt/drc/drc_wake.py --mando auto --ausencia 30
 Restart=no

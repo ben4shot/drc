@@ -45,11 +45,24 @@ class TsGrid {
     if (n < 1) n = 1;
     ts_ += n * period_;
     double e = static_cast<double>(static_cast<int32_t>(target - Round()));
+    // Si la rejilla se desvía >= 3/4 de fotograma (p. ej. tras un tick_skip donde n<1 se
+    // forzó a 1 y dejó ts_ adelantado 1 fotograma), re-anclar en vez de tardar ~93 s en volver.
+    if (std::fabs(e) > period_ * 0.75) {
+      ts_ = target;
+      err_ = 0.0;
+      return Round();
+    }
     err_ = e;
     if (e > slew_) e = slew_;
     if (e < -slew_) e = -slew_;
     ts_ += e;
     return Round();
+  }
+
+  // Re-ancla al TSF en el siguiente Next() (p. ej. al disparar reanchor).
+  void Reset() {
+    inited_ = false;
+    err_ = 0.0;
   }
 
   // Diferencia entre el objetivo y la rejilla antes de corregir en el último Next() (diagnóstico).

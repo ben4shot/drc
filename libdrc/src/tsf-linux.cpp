@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <net/if.h>
+#include <time.h>
 #include <unistd.h>
 
 namespace drc {
@@ -79,8 +80,10 @@ int GetInterfaceOfIpv4(const std::string& addr, std::string* out) {
 }
 
 u64 NowUs() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-      std::chrono::steady_clock::now().time_since_epoch()).count();
+  // CLOCK_MONOTONIC_RAW no sufre el slew de NTP (timesyncd) y coincide con ktime_get_raw_ns del kernel.
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+  return static_cast<u64>(ts.tv_sec) * 1000000ULL + static_cast<u64>(ts.tv_nsec) / 1000ULL;
 }
 
 std::atomic<long long> g_anchor_step_max(0);

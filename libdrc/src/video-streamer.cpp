@@ -416,19 +416,16 @@ void VideoStreamer::InitEventsAndRun() {
   // Tamaño de los 3 últimos frames enviados (el más reciente primero; negativo = IDR),
   // para ver si los resync siguen a frames grandes.
   long recent_bytes[3] = {0, 0, 0};
-  ChunkFeed chunk_feed;   // DRC_CHUNK_FEED (más abajo); aquí para que el registro de resync dé su posición
-  bool feed_on = false;
   resync_evt_ = NewTriggerableEvent([&](Event*) {
     // Con x264 en varios hilos el IDR tarda varios ticks: los avisos de mientras tanto no deben pedir otro.
     const bool in_flight = idr_in_pipeline || (idr_sent_once &&
         ResyncInFlight(static_cast<int>(tick_count - idr_sent_tick), resync_ignore_ticks));
     if (resync_log) {
-      fprintf(stderr, "[libdrc] resync tick=%llu since_idr_tick=%llu pending=%d last=%ld,%ld,%ld feed=%ld%s\n",
+      fprintf(stderr, "[libdrc] resync tick=%llu since_idr_tick=%llu pending=%d last=%ld,%ld,%ld%s\n",
               (unsigned long long)tick_count,
               (unsigned long long)(tick_count - last_idr_tick),
               resync_requested ? 1 : 0,
               recent_bytes[0], recent_bytes[1], recent_bytes[2],
-              feed_on ? static_cast<long>(chunk_feed.Position()) : -1L,
               in_flight ? " ignored=1" : "");
     }
     if (!in_flight) resync_requested = true;
@@ -440,6 +437,8 @@ void VideoStreamer::InitEventsAndRun() {
   std::vector<std::string> h264_chunks;
   // DRC_CHUNK_FEED=<fichero CFD1>: en vez de x264, cada tick toma el siguiente frame H.264 de la
   // consola (rpi4/chunkfeed.py) y lo entrega por el camino de los chunks precodificados.
+  ChunkFeed chunk_feed;
+  bool feed_on = false;
   bool feed_idr = false;
   uint64_t feed_rewind_tick = 0;
   if (const char* feed_path = getenv("DRC_CHUNK_FEED")) {
@@ -462,17 +461,6 @@ void VideoStreamer::InitEventsAndRun() {
   const char* cfd_frames_env = getenv("DRC_CFD_DUMP_FRAMES");
   ChunkFeedWriter cfd_writer(cfd_frames_env ? static_cast<uint32_t>(atoi(cfd_frames_env)) : 4200);
   bool cfd_written = false;
-  // Escribe la grabación una vez: al llenarse o al parar la sesión (lo que antes ocurra).
-  auto cfd_write = [&]() {
-    if (!cfd_dump_path || cfd_written) return;
-    cfd_written = true;
-    const std::string blob = cfd_writer.Blob();
-    if (FILE* f = fopen(cfd_dump_path, "wb")) {
-      fwrite(blob.data(), 1, blob.size(), f);
-      fclose(f);
-    }
-    fprintf(stderr, "[libdrc] cfd_dump escrito: %zu B\n", blob.size());
-  };
   auto cfd_add = [&](const H264ChunkArray& chunks, bool idr) {
     if (!cfd_dump_path || cfd_written) return;
     std::vector<std::string> copy;
@@ -483,7 +471,15 @@ void VideoStreamer::InitEventsAndRun() {
       copy.emplace_back(reinterpret_cast<const char*>(ptr), ptr ? n : 0);
     }
     cfd_writer.Add(idr, copy);
-    if (cfd_writer.Full()) cfd_write();
+    if (cfd_writer.Full()) {
+      cfd_written = true;
+      const std::string blob = cfd_writer.Blob();
+      if (FILE* f = fopen(cfd_dump_path, "wb")) {
+        fwrite(blob.data(), 1, blob.size(), f);
+        fclose(f);
+      }
+      fprintf(stderr, "[libdrc] cfd_dump escrito: %zu B\n", blob.size());
+    }
   };
 
   bool vstrm_inited = false;
@@ -644,6 +640,7 @@ void VideoStreamer::InitEventsAndRun() {
       g_astrm_format_word = AstrmFormatWord(++reanchor_generation);
       reanchor_count++;
       resync_requested = true;
+      if (ts_grid_on) ts_grid.Reset();
       fprintf(stderr, "[libdrc] reanchor word=%u\n", g_astrm_format_word);
     }
 
@@ -742,15 +739,8 @@ void VideoStreamer::InitEventsAndRun() {
         const char* e = getenv("DRC_FEED_REWIND_TICKS");
         return e ? atoi(e) : 6;
       }();
-      // DRC_FEED_SEEK=idr: saltar al siguiente IDR del fichero (sigue avanzando; un frame malo no lo bloquea).
-      static const bool seek_idr = [] {
-        const char* e = getenv("DRC_FEED_SEEK");
-        const bool on = e && std::string(e) == "idr";
-        fprintf(stderr, "[libdrc] feed_seek=%s\n", on ? "idr" : "inicio");
-        return on;
-      }();
       if (resync_requested && tick_count - feed_rewind_tick >= rewind_min) {
-        if (seek_idr) chunk_feed.SkipToNextIdr(); else chunk_feed.Rewind();
+        chunk_feed.Rewind();
         feed_rewind_tick = tick_count;
       }
       // Como la consola: ... P | hueco | IDR | hueco | P ...
@@ -923,7 +913,6 @@ void VideoStreamer::InitEventsAndRun() {
   });
 
   ThreadedEventMachine::InitEventsAndRun();
-  cfd_write();   // DRC_CFD_DUMP: lo grabado hasta aquí, aunque no se llenara
 }
 
 bool VideoStreamer::LatchOnCurrentFrame(std::vector<byte>* latched_frame) {

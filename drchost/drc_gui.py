@@ -300,7 +300,7 @@ class Window(Adw.ApplicationWindow):
         self.log.scroll_to_mark(buf.create_mark(None, buf.get_end_iter(), False), 0.0, False, 0, 0)
         return False
 
-    def _run(self, cmd, on_done=None, success_marker=None):
+    def _run(self, cmd, on_done=None, success_marker=None, on_marker=None):
         if self.proc is not None and self.proc.poll() is None:
             return
         self._append("$ " + " ".join(cmd) + "\n")
@@ -316,8 +316,10 @@ class Window(Adw.ApplicationWindow):
             ok = False
             for line in proc.stdout:
                 GLib.idle_add(self._append, line)
-                if success_marker and success_marker in line:
+                if success_marker and success_marker in line and not ok:
                     ok = True
+                    if on_marker:
+                        GLib.idle_add(on_marker)
             rc = proc.wait()
             GLib.idle_add(self._finished, rc, ok, on_done)
         threading.Thread(target=reader, daemon=True).start()
@@ -333,9 +335,21 @@ class Window(Adw.ApplicationWindow):
     def _on_pair(self, *_):
         sym = self.selected_symbols()
         self.toast.add_toast(Adw.Toast(title=f"En el GamePad: botón SYNC y los símbolos {ctl.show_symbols(sym)}", timeout=0))
-        self._run(ctl.pair_command(self.host, self.selected_iface(), sym, gui=True),
-                  lambda rc, ok: self.toast.add_toast(Adw.Toast(title="¡GamePad emparejado!" if ok else "No se completó el emparejamiento")),
-                  success_marker="GamePad emparejado")
+        # Al emparejar empieza la transmisión (modo de la pestaña Transmitir) si no falta nada más para ella
+        mode = self.mode_row.get_selected_item().get_string()
+        stop = [c for c in ctl.blocking(self.start_checks) if c.key != "paired"]
+        start_mode = None if stop else mode
+
+        def emparejado():
+            self.toast.add_toast(Adw.Toast(title="¡GamePad emparejado! Empieza la transmisión" if start_mode
+                                           else "¡GamePad emparejado!"))
+            if start_mode:
+                self.stack.set_visible_child_name("start")
+            return False
+
+        self._run(ctl.pair_command(self.host, self.selected_iface(), sym, gui=True, start_mode=start_mode),
+                  lambda rc, ok: None if ok else self.toast.add_toast(Adw.Toast(title="No se completó el emparejamiento")),
+                  success_marker="GamePad emparejado", on_marker=emparejado)
 
     def _on_start(self, *_):
         mode = self.mode_row.get_selected_item().get_string()

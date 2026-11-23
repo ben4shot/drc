@@ -1,0 +1,23 @@
+// Overlay de Device Tree para Raspberry Pi 4 (CYW43455 / brcmfmac):
+// En el CLM de Cypress el país "CL" está mapeado como ETSI (desactiva canales 149-165),
+// aunque en Chile (SUBTEL / regulatory.db) 149-165 son legales sin DFS a 20 dBm.
+// Con brcm,ccode-map = "CL-US-0", el kernel aplica regulatory.db de CL (bloquea 100-144)
+// y el firmware recibe US/0 (habilita 149-165).
+//
+// Compilar e instalar en la Pi:
+//   dtc -@ -I dts -O dtb -o /boot/firmware/overlays/brcm-cl.dtbo brcm-cl-overlay.dts
+//   Añadir `dtoverlay=brcm-cl` en /boot/firmware/config.txt
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target = <&brcmf>;
+        __overlay__ {
+            brcm,ccode-map = "CL-US-0";
+        };
+    };
+};

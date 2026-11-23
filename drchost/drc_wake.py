@@ -6,19 +6,40 @@ El mando, al encenderse, emite una ráfaga (~220-830 copias en 50-200 ms) de una
 descifrarla: tipo, destino, tamaño y PN=1 + la cadencia bastan. Con `wlan1` en monitor se vigila y, al verla,
 se devuelve la interfaz a modo gestionado y se arranca `drc` (que levanta el AP; el mando se asocia solo).
 
-Uso (root):  drc_wake.py [--iface wlan1] [--canal 36] [--mando aa:bb:cc:dd:ee:01]
+Uso (root):  drc_wake.py [--iface wlan1] [--canal 36] [--mando cc:fb:65:bf:44:29]
 """
 import argparse
+import os
+import re
+import shutil
+import signal
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
+
+for _p in ("/usr/sbin", "/sbin", "/usr/local/sbin"):
+    if _p not in os.environ.get("PATH", "").split(":"):
+        os.environ["PATH"] = os.environ.get("PATH", "") + ":" + _p
 
 LARGO_WAKE = 71
 MINIMAS = 20
 VENTANA = 0.5
 ENFRIAMIENTO = 10.0
+DROP_DIR_DRC = "/etc/systemd/system/drc.service.d"
+AP_CONF_CANDIDATES = (
+    "/var/lib/drc/generated_ap_normal.conf",
+    "/etc/drc/generated_ap_normal.conf",
+)
+HOSTAPD_CANDIDATES = (
+    "/opt/drc/build/vanilla-drc-hostap/hostapd/hostapd",
+    "/opt/drc/build/drc-hostap/hostapd/hostapd",
+    "/usr/local/bin/hostapd",
+    "/usr/sbin/hostapd",
+)
 
 
 def dot11_de_radiotap(p):
@@ -190,51 +211,263 @@ def vigiar_ausencia(iface, mando, plazo=30, ejecutar=subprocess.run, leer=None, 
         dormir(cada)
 
 
-def _conf_iface() -> str:
-    """Interfaz Wi-Fi del GamePad: WIFI_IFACE de drc.conf (o wlan0)."""
-    try:
-        from drc_ap import load_drc_conf
-        return load_drc_conf().get("WIFI_IFACE", "wlan0")
-    except Exception:
-        return "wlan0"
+def _conf_path(conf_path=None):
+    return conf_path or os.environ.get("DRC_CONF_FILE") or "/etc/drc/drc.conf"
 
 
-def _conf_channel() -> int:
-    """Canal del AP del GamePad: WIFI_CHANNEL de drc.conf (o 36)."""
+def _conf_iface(default="wlan1"):
+    p = _conf_path()
+    if Path(p).is_file():
+        try:
+            for line in Path(p).read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = re.match(r"^\s*WIFI_IFACE\s*=\s*['\"]?([^\s'\"#]+)['\"]?", line)
+                if m:
+                    return m.group(1)
+        except OSError:
+            pass
+    return default
+
+
+def _conf_channel(default=36):
+    p = _conf_path()
+    if Path(p).is_file():
+        try:
+            for line in Path(p).read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = re.match(r"^\s*WIFI_CHANNEL\s*=\s*['\"]?(\d+)['\"]?", line)
+                if m:
+                    return int(m.group(1))
+        except OSError:
+            pass
+    return default
+
+
+def interfaz_configurada(drop_dir=DROP_DIR_DRC, conf_path=None, default="wlan1"):
+    """Lee la interfaz activa de drc: último `Environment=DRC_IFACE=...` en los drop-ins de drc.service,
+    si no `WIFI_IFACE` en drc.conf, si no `default`."""
+    iface = None
+    d = Path(drop_dir)
+    if d.is_dir():
+        for p in sorted(d.glob("*.conf")):
+            try:
+                for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    m = re.match(r"^\s*Environment\s*=\s*['\"]?DRC_IFACE=([^\s'\"]+)['\"]?", line)
+                    if m:
+                        iface = m.group(1)
+            except OSError:
+                pass
+    if iface:
+        return iface
+    cp = _conf_path(conf_path)
+    if cp and Path(cp).is_file():
+        try:
+            for line in Path(cp).read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = re.match(r"^\s*WIFI_IFACE\s*=\s*['\"]?([^\s'\"#]+)['\"]?", line)
+                if m:
+                    return m.group(1)
+        except OSError:
+            pass
+    return default
+
+
+def _regdom_configurado(conf_path="/etc/drc/drc.conf", default="US"):
+    if conf_path and Path(conf_path).is_file():
+        try:
+            for line in Path(conf_path).read_text(encoding="utf-8", errors="ignore").splitlines():
+                m = re.match(r"^\s*WIFI_REGDOM\s*=\s*['\"]?([^\s'\"#]+)['\"]?", line)
+                if m:
+                    return m.group(1)
+        except OSError:
+            pass
+    return default
+
+
+def soporta_monitor(iface, leer_phy=None, ejecutar=None):
+    """¿El chip Wi-Fi de `iface` admite modo monitor según `iw phy <phy> info`?"""
+    if leer_phy is None:
+        phy_path = Path(f"/sys/class/net/{iface}/phy80211/name")
+        try:
+            phy = phy_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            phy = ""
+    else:
+        phy = leer_phy(iface)
+    if not phy:
+        return False
+    if ejecutar is None:
+        try:
+            r = subprocess.run(["iw", "phy", phy, "info"], capture_output=True, text=True, timeout=5, check=False)
+            out = r.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    else:
+        out = ejecutar(["iw", "phy", phy, "info"])
+    en_modos = False
+    for line in out.splitlines():
+        if "Supported interface modes:" in line:
+            en_modos = True
+            continue
+        if en_modos:
+            s = line.strip()
+            if s.startswith("*"):
+                if s.lstrip("* ").strip() == "monitor":
+                    return True
+            elif s:
+                break
+    return False
+
+
+def buscar_hostapd(candidates=HOSTAPD_CANDIDATES):
+    for c in candidates:
+        if Path(c).is_file():
+            return str(c)
+    return shutil.which("hostapd")
+
+
+def buscar_ap_conf(candidates=AP_CONF_CANDIDATES):
+    for c in candidates:
+        if Path(c).is_file():
+            return str(c)
+    return None
+
+
+def _preparar_iface_ap(iface, target_mac=None, ejecutar=subprocess.run):
+    if shutil.which("nmcli"):
+        ejecutar(["nmcli", "device", "disconnect", iface], check=False,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ejecutar(["nmcli", "device", "set", iface, "managed", "no"], check=False,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ejecutar(["rfkill", "unblock", "wifi"], check=False,
+             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ejecutar(["iw", "reg", "set", _regdom_configurado()], check=False,
+             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sock = Path(f"/var/run/hostapd/{iface}")
     try:
-        from drc_ap import load_drc_conf
-        return int(load_drc_conf().get("WIFI_CHANNEL", "36") or 36)
-    except Exception:
-        return 36
+        if sock.exists():
+            sock.unlink()
+    except OSError:
+        pass
+    ejecutar(["ip", "link", "set", "dev", iface, "down"], check=False)
+    if target_mac:
+        ejecutar(["ip", "link", "set", "dev", iface, "address", target_mac], check=False)
+    ejecutar(["ip", "link", "set", "dev", iface, "up"], check=True)
+
+
+def vigilar_ap(iface, mando, ap_conf=None, hostapd_bin=None, ejecutar=subprocess.run,
+               lanzar=subprocess.Popen, leer=None, dormir=time.sleep, cada=0.25):
+    """Alternativa cuando `iface` no soporta modo monitor (p. ej. wlan0 interno):
+    levanta solo hostapd ligero con la configuración del AP normal y, al asociarse el GamePad,
+    detiene ese hostapd y arranca `drc`."""
+    ap_conf = ap_conf or buscar_ap_conf()
+    hostapd_bin = hostapd_bin or buscar_hostapd()
+    if not ap_conf:
+        print("[drc_wake] no se encontró generated_ap_normal.conf para AP en espera", file=sys.stderr, flush=True)
+        return False
+    if not hostapd_bin:
+        print("[drc_wake] no se encontró binario hostapd para AP en espera", file=sys.stderr, flush=True)
+        return False
+
+    conf_text = Path(ap_conf).read_text(encoding="utf-8")
+    fixed_conf = re.sub(r"^interface=.*$", f"interface={iface}", conf_text, flags=re.MULTILINE)
+    if "interface=" not in fixed_conf:
+        fixed_conf = f"interface={iface}\n" + fixed_conf
+
+    m_ssid = re.search(r"^ssid=WiiU([0-9a-fA-F]{12})", fixed_conf, re.MULTILINE)
+    target_mac = ":".join(m_ssid.group(1)[i:i + 2] for i in range(0, 12, 2)) if m_ssid else None
+
+    _preparar_iface_ap(iface, target_mac=target_mac, ejecutar=ejecutar)
+
+    if leer is None:
+        def leer():
+            r = subprocess.run(["iw", "dev", iface, "station", "dump"], capture_output=True, text=True, timeout=5)
+            return r.stdout
+
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="drc_wake_ap_", suffix=".conf")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(fixed_conf)
+        proc = lanzar([hostapd_bin, tmp_path])
+        detectado = False
+        try:
+            while True:
+                if proc.poll() is not None:
+                    print(f"[drc_wake] hostapd terminó inesperadamente (código {proc.returncode})",
+                          file=sys.stderr, flush=True)
+                    return False
+                try:
+                    volcado = leer()
+                except (subprocess.TimeoutExpired, OSError):
+                    volcado = ""
+                if (mando is not None and estacion_presente(volcado, mando)) or (
+                    mando is None and "Station " in volcado
+                ):
+                    mac_txt = mando.hex(":") if mando is not None else "GamePad"
+                    print(f"[drc_wake] asociación de {mac_txt} en AP en espera ({iface}) -> arrancando drc",
+                          flush=True)
+                    detectado = True
+                    break
+                dormir(cada)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            sock = Path(f"/var/run/hostapd/{iface}")
+            try:
+                if sock.exists():
+                    sock.unlink()
+            except OSError:
+                pass
+        if detectado:
+            ejecutar(["systemctl", "start", "--no-block", "drc"], check=False)
+            return True
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--iface", default=_conf_iface())
-    ap.add_argument("--canal", type=int, default=_conf_channel())
+    ap.add_argument("--iface", default="auto",
+                    help="interfaz Wi-Fi; «auto» usa la configurada en drc.service.d / drc.conf")
+    ap.add_argument("--canal", type=int, default=36)
     ap.add_argument("--saltar", action="store_true", help="saltar entre los canales de 5 GHz (busca probes)")
     ap.add_argument("--mando", default=None, help="MAC del GamePad; «auto» = el vinculado con la Pi; si se omite, cualquier emisor")
     ap.add_argument("--ausencia", type=int, default=None, metavar="S",
                     help="modo vigía (con drc activo): parar drc si el mando falta S segundos")
     a = ap.parse_args(argv)
+    iface = interfaz_configurada() if a.iface == "auto" else a.iface
     if a.ausencia is not None:
         mando = mando_vinculado() if a.mando in (None, "auto") else bytes.fromhex(a.mando.replace(":", ""))
         if mando is None:
             print("[drc_wake] sin GamePad vinculado: nada que vigilar", flush=True)
             return 0
-        vigiar_ausencia(a.iface, mando, plazo=a.ausencia)
+        print(f"[drc_wake] vigilando ausencia en {iface} ({mando.hex(':')}, plazo {a.ausencia} s)", flush=True)
+        vigiar_ausencia(iface, mando, plazo=a.ausencia)
         return 0
-    pi = mac_de(f"/sys/class/net/{a.iface}/address")
     if a.mando == "auto":
         mando = mando_vinculado()
         if mando is None:
             print("[drc_wake] sin GamePad vinculado: se acepta cualquier emisor", flush=True)
     else:
         mando = bytes.fromhex(a.mando.replace(":", "")) if a.mando else None
-    for o in ordenes_monitor(a.iface, a.canal):
+    if not soporta_monitor(iface):
+        def _salir(_sig, _frame):
+            raise SystemExit(0)
+        signal.signal(signal.SIGTERM, _salir)
+        signal.signal(signal.SIGINT, _salir)
+        print(f"[drc_wake] {iface} no soporta modo monitor -> vigilando con AP en espera", flush=True)
+        return 0 if vigilar_ap(iface, mando) else 1
+    pi = mac_de(f"/sys/class/net/{iface}/address")
+    for o in ordenes_monitor(iface, a.canal):
         subprocess.run(o, check=True)
-    print(f"[drc_wake] vigilando {a.iface} canal {a.canal} (Pi {pi.hex(':')})", flush=True)
-    vigilar(a.iface, pi, mando, canales=CANALES_5G if a.saltar and mando else None)
+    print(f"[drc_wake] vigilando {iface} canal {a.canal} (Pi {pi.hex(':')})", flush=True)
+    vigilar(iface, pi, mando, canales=CANALES_5G if a.saltar and mando else None)
     return 0
 
 

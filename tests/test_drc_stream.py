@@ -1662,3 +1662,18 @@ def _empty_conf():
     fd, path = tempfile.mkstemp(suffix=".conf")
     os.close(fd)
     return path
+
+
+def test_audio_de_wlan0_cabe_en_una_trama():
+    """Prueba 168: en modo internal (wlan0, CYW43455 que no emite tramas de más de 1500 B) el paquete de
+    audio (DRC_AUDIO_PACKET_SAMPLES × 4 B + 8 de cabecera astrm + 28 de UDP/IP) cabe en DRC_MTU. Con 384
+    muestras (1572 B) cada paquete salía partido en dos fragmentos IP y el audio se cortaba (B19, 2026-11-22).
+    """
+    import re
+    text = (PKG / "drc_mode.sh").read_text()
+    block = text[text.index("internal)"):]
+    block = block[block.index("<<CONF"):block.index("\nCONF")]
+    env = dict(re.findall(r"Environment=(\w+)=(\S+)", block))
+    samples = int(env.get("DRC_AUDIO_PACKET_SAMPLES", "384"))
+    mtu = int(env["DRC_MTU"])
+    assert samples * 4 + 8 + 28 <= mtu, f"audio de {samples} muestras = {samples * 4 + 36} B > MTU {mtu}"

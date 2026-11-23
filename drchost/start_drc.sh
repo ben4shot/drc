@@ -220,6 +220,13 @@ DRC_RT_PRIO="${DRC_RT_PRIO:-50}"
 # cada frame según el ritmo del socket de vídeo (DRC_PACING_KBPS en libdrc).
 export DRC_VSTRM_PAYLOAD="${DRC_VSTRM_PAYLOAD:-${VSTRM_PAYLOAD_SIZE:-1456}}"
 export DRC_TS_OFFSET_US="${DRC_TS_OFFSET_US:-${TS_OFFSET_US:-22000}}"
+# Alinear el sello de tiempo de audio (astrm) con DRC_TS_OFFSET_US: libdrc resta 25000 µs por defecto,
+# lo que desfasaba el audio -8.3 ms al usar 16684 µs (borde de la ventana de 8 ms del GamePad).
+if [ -n "${DRC_AUDIO_TS_OFFSET_US:-}" ]; then
+    printf '%s\n' "${DRC_AUDIO_TS_OFFSET_US}" > /tmp/drc_audio_ts_offset_us 2>/dev/null || true
+elif [[ "${DRC_TS_OFFSET_US}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "-${DRC_TS_OFFSET_US}" > /tmp/drc_audio_ts_offset_us 2>/dev/null || true
+fi
 export DRC_TSF_SAWTOOTH="${DRC_TSF_SAWTOOTH:-${TSF_SAWTOOTH_FILTER:-0}}"
 export DRC_TSF_RTT_GATE="${DRC_TSF_RTT_GATE:-${TSF_RTT_GATE:-0}}"
 export DRC_MV_RANGE="${DRC_MV_RANGE:-64}"
@@ -554,13 +561,36 @@ echo "[*] Esperando conexión y asignación de IP del GamePad (timeout ${TIMEOUT
 echo "    (Enciende tu Wii U GamePad presionando su botón POWER)"
 
 CONNECTED=0
+ASSOC_TIME=0
 START_TIME=$(date +%s)
+IW_BIN="$(command -v iw 2>/dev/null || echo /usr/sbin/iw)"
 while true; do
     if [ -f "${LOG_FILE}" ]; then
         if grep -q "Sent Ack" "${LOG_FILE}" && grep -q "192.168.1.11" "${LOG_FILE}"; then
             CONNECTED=1
             break
         fi
+    fi
+
+    # Si el GamePad ya estaba encendido, se asocia por WPA2-PSK pero suele conservar su IP
+    # (192.168.1.11) sin repetir DHCP: detectar asociación autenticada + ARP o tras 3 s.
+    STA_DUMP="$("${IW_BIN}" dev "${IFACE}" station dump 2>/dev/null || true)"
+    if printf '%s\n' "${STA_DUMP}" | grep -q "authorized:.*yes" && printf '%s\n' "${STA_DUMP}" | grep -q "associated:.*yes"; then
+        NEIGH_LINE="$(ip -4 neigh show dev "${IFACE}" 192.168.1.11 2>/dev/null || true)"
+        if printf '%s\n' "${NEIGH_LINE}" | grep -q "lladdr" && ! printf '%s\n' "${NEIGH_LINE}" | grep -q "FAILED"; then
+            echo "[+] GamePad ya asociado y presente en 192.168.1.11 (sin nuevo DHCP)."
+            CONNECTED=1
+            break
+        fi
+        if [ "${ASSOC_TIME}" -eq 0 ]; then
+            ASSOC_TIME=$(date +%s)
+        elif [ $(( $(date +%s) - ASSOC_TIME )) -ge 3 ]; then
+            echo "[+] GamePad ya asociado y autenticado (conservando IP 192.168.1.11 sin nuevo DHCP)."
+            CONNECTED=1
+            break
+        fi
+    else
+        ASSOC_TIME=0
     fi
 
     NOW=$(date +%s)

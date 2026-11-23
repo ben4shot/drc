@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -738,12 +739,23 @@ def privilege_prefix(host: Host, gui: bool = False) -> List[str]:
     return []
 
 
-def pair_command(host: Host, iface: str, symbols: Sequence[int], gui: bool = False) -> List[str]:
-    return privilege_prefix(host, gui) + [
-        "env", f"DRC_DESKTOP_USER={host.user()}",
-        sys.executable, str(HERE / "drc_ap.py"), "--pair", "--iface", iface,
-        "--symbols", ",".join(map(str, symbols)),
-    ]
+def pair_command(host: Host, iface: str, symbols: Sequence[int], gui: bool = False,
+                 start_mode: Optional[str] = None) -> List[str]:
+    """Emparejar. Con start_mode, si sale bien sigue sin pausa la sesión (start_drc.sh) en ese modo: una sola
+    orden con privilegios (una sola contraseña) y `stop` la para igual (pkill start_drc.sh)."""
+    env = ["env", f"DRC_DESKTOP_USER={host.user()}"]
+    pair = [sys.executable, str(HERE / "drc_ap.py"), "--pair", "--iface", iface,
+            "--symbols", ",".join(map(str, symbols))]
+    if start_mode is None:
+        return privilege_prefix(host, gui) + env + pair
+    start = ["bash", str(HERE / "start_drc.sh"), "--iface", iface, "--mode", start_mode]
+    script = " ".join(map(shlex.quote, pair)) + " && exec " + " ".join(map(shlex.quote, start))
+    return privilege_prefix(host, gui) + env + ["bash", "-c", script]
+
+
+def autostart_blockers(host: Host, iface: str, mode: str = "") -> List[Check]:
+    """Lo que impediría transmitir nada más emparejar (todo lo de check_start menos el propio emparejamiento)."""
+    return [c for c in blocking(check_start(host, iface, mode=mode)) if c.key != "paired"]
 
 
 def start_command(host: Host, iface: str, mode: str = "", gui: bool = False) -> List[str]:
@@ -856,8 +868,14 @@ def do_pair(host: Host, input_fn=input, out=print, runner=run_action) -> int:
         return 1
     if problems(checks) and ask("\n¿Seguir? [S/n] ", input_fn).lower() in ("n", "no"):
         return 0
+    mode = effective_mode()
+    stop = autostart_blockers(host, iface, mode)
+    if stop:
+        out("\nAl emparejar no se transmitirá todavía; para eso falta:\n" + format_checks(stop, color=sys.stdout.isatty()))
+    else:
+        out(f"\nAl emparejar empezará la transmisión (modo {mode}); Ctrl+C para detenerla.")
     out(f"\nEn el GamePad: botón SYNC (detrás) y los símbolos {show_symbols(sym)}.")
-    return runner(pair_command(host, iface, sym))
+    return runner(pair_command(host, iface, sym, start_mode=None if stop else mode))
 
 
 def do_start(host: Host, input_fn=input, out=print, runner=run_action) -> int:
@@ -976,6 +994,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub.add_parser("ifaces")
     c = sub.add_parser("check"); c.add_argument("what", choices=("pair", "start")); c.add_argument("--iface"); c.add_argument("--symbols"); c.add_argument("--mode", default="")
     pr = sub.add_parser("pair"); pr.add_argument("--iface"); pr.add_argument("--symbols")
+    pr.add_argument("--mode", default="", help="modo de la transmisión que empieza al emparejar")
+    pr.add_argument("--no-start", action="store_true", help="solo emparejar, sin empezar a transmitir")
     st = sub.add_parser("start"); st.add_argument("--iface"); st.add_argument("--mode", default="")
     sub.add_parser("stop")
     sub.add_parser("config")
@@ -1035,7 +1055,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if blocking(checks):
         print(format_checks(checks, color=sys.stdout.isatty()))
         return 1
-    return run_action(pair_command(host, iface, sym))
+    start_mode = None
+    if not args.no_start:
+        mode = args.mode or effective_mode()
+        stop = autostart_blockers(host, iface, mode)
+        if stop:
+            print("Al emparejar no se transmitirá todavía; para eso falta:\n" + format_checks(stop, color=sys.stdout.isatty()))
+        else:
+            start_mode = mode
+            print(f"Al emparejar empezará la transmisión (modo {mode}); Ctrl+C para detenerla.")
+    return run_action(pair_command(host, iface, sym, start_mode=start_mode))
 
 
 if __name__ == "__main__":
